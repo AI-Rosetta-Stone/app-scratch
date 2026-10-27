@@ -28,7 +28,8 @@
 # is NOT the right field here -- it is the ephemeral merge-group TEST (squash) commit,
 # not the PR's own branch head, and fails enqueuePullRequest's expectedHeadOid check
 # with "expected head oid does not match the current head oid" (caught live-fire,
-# F2 double-failure arm).
+# F2 double-failure arm, now historical since F1/F2 were removed -- this script's
+# headSha field is still used, purely for naming in the alert-only path's issue body).
 # Exits 1 (fail closed) on ANY problem, with a legible ::error:: line.
 set -euo pipefail
 
