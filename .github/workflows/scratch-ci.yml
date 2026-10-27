@@ -27,7 +27,10 @@ jobs:
           echo "ci-gate: simulating the full suite..."
           sleep 45
           mkdir -p classify
-          if [ -f .scratch-force-failure ]; then
+          # Force-failure only matters at merge_group time -- a PR's own pull_request-triggered
+          # ci-gate must stay green so it can enqueue at all (mirrors the real design where
+          # PR-tier doesn't run the full suite).
+          if [ "${{ github.event_name }}" = "merge_group" ] && [ -f .scratch-force-failure ]; then
             MODE=$(cat .scratch-force-failure)
             echo "ci-gate: forced failure mode = $MODE"
             if [ "$MODE" = "infra" ]; then
@@ -67,12 +70,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x get-merge-group-prs.sh
-          BRANCH="${{ github.event.merge_group.base_ref }}"
-          BRANCH="${BRANCH#refs/heads/}"
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "$BRANCH" \
-            "${{ github.event.merge_group.head_ref }}")
+            "${{ github.ref }}")
           echo "group PRs and labels: $PRS_JSON"
           HELD=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("consult-hold"))] | map(.number) | join(",")')
           if [ -n "$HELD" ]; then
@@ -96,12 +96,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x get-merge-group-prs.sh
-          BRANCH="${{ github.event.merge_group.base_ref }}"
-          BRANCH="${BRANCH#refs/heads/}"
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "$BRANCH" \
-            "${{ github.event.merge_group.head_ref }}")
+            "${{ github.ref }}")
           echo "group PRs and labels: $PRS_JSON"
           JOINT=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("joint-gv"))] | map(.number) | join(",")')
           if [ -n "$JOINT" ]; then
