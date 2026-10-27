@@ -6,11 +6,12 @@
 #
 # A merge-group commit (base_sha..head_sha) contains one commit per PR queued
 # at or before this entry's position. We resolve each commit in that range to
-# its originating PR via GET /commits/{sha}/pulls, then cross-check the PR
-# count against the group's queue position (parsed from
-# github.event.merge_group.head_ref, which GitHub names
-# refs/heads/gh-readonly-queue/<branch>/pr-<N>-<sha>) as a second, independent
-# signal that nothing was silently dropped.
+# its originating PR via GET /commits/{sha}/pulls, then cross-check that the
+# PR at head_sha itself matches the PR number GitHub embeds in head_ref
+# (refs/heads/gh-readonly-queue/<branch>/pr-<N>-<sha> -- CORRECTED by live-fire,
+# t/4567: N is this entry's OWN PR number, the newest/last-queued PR in the
+# batch, NOT a count of PRs in the group as originally assumed. The cross-check
+# is therefore an IDENTITY check on the last commit, not a COUNT check.)
 #
 # Usage: get-merge-group-prs.sh <repo> <base_sha> <head_sha> <head_ref>
 # Prints a JSON array of {number, labels: [string...]} to stdout on success.
@@ -71,21 +72,22 @@ for sha in $(echo "$COMMITS_JSON" | jq -r '.[]'); do
   fi
   NUM=$(echo "$PULLS_JSON" | jq -r '.[0].number')
   PR_NUMBERS+=("$NUM")
+  HEAD_SHA_PR_NUM="$NUM"  # the LAST commit in the range is at head_sha
 done
 
 # De-dupe (a PR can have multiple commits in a non-squash group).
 UNIQUE_NUMBERS=$(printf '%s\n' "${PR_NUMBERS[@]}" | sort -un)
-UNIQUE_COUNT=$(echo "$UNIQUE_NUMBERS" | grep -c . || true)
 
-# ---- 3. cross-check against the queue position parsed from head_ref ----
-# head_ref shape: refs/heads/gh-readonly-queue/<branch>/pr-<N>-<sha>
-QUEUE_POSITION=$(echo "$HEAD_REF" | grep -oP 'gh-readonly-queue/[^/]+/pr-\K[0-9]+' || true)
-if [ -z "$QUEUE_POSITION" ]; then
-  echo "::error::get-merge-group-prs: could not parse a queue position out of head_ref '${HEAD_REF}' -- expected gh-readonly-queue/<branch>/pr-<N>-<sha>. FAILING CLOSED (cannot cross-check group size)." >&2
+# ---- 3. cross-check: the PR at head_sha must match head_ref's own PR number ----
+# head_ref shape: refs/heads/gh-readonly-queue/<branch>/pr-<N>-<sha>, where N is
+# THIS entry's PR number (not a group size/count -- corrected by live-fire).
+HEAD_REF_PR_NUM=$(echo "$HEAD_REF" | grep -oP 'gh-readonly-queue/[^/]+/pr-\K[0-9]+' || true)
+if [ -z "$HEAD_REF_PR_NUM" ]; then
+  echo "::error::get-merge-group-prs: could not parse a PR number out of head_ref '${HEAD_REF}' -- expected gh-readonly-queue/<branch>/pr-<N>-<sha>. FAILING CLOSED (cannot cross-check group identity)." >&2
   exit 1
 fi
-if [ "$UNIQUE_COUNT" -ne "$QUEUE_POSITION" ]; then
-  echo "::error::get-merge-group-prs: resolved ${UNIQUE_COUNT} unique PR(s) from the commit range, but head_ref implies queue position ${QUEUE_POSITION} -- COUNT MISMATCH. FAILING CLOSED (cannot prove nothing was dropped)." >&2
+if [ "$HEAD_SHA_PR_NUM" != "$HEAD_REF_PR_NUM" ]; then
+  echo "::error::get-merge-group-prs: the commit at head_sha resolves to PR #${HEAD_SHA_PR_NUM}, but head_ref names PR #${HEAD_REF_PR_NUM} -- IDENTITY MISMATCH. FAILING CLOSED (base_sha/head_sha resolution is probably wrong)." >&2
   exit 1
 fi
 
