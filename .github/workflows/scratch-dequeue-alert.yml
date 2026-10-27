@@ -12,7 +12,7 @@ jobs:
     # t/4567 D1 live-fire finding: the reason lives at github.event.reason (top level of
     # the dequeued payload), NOT github.event.pull_request.merge_queue_dequeue_reason --
     # confirmed via a payload dump (reason: "MERGE" on a clean merge).
-    if: github.event.reason != 'MERGE'
+    if: github.event.reason != 'MERGE' && github.event.reason != 'MANUAL'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
