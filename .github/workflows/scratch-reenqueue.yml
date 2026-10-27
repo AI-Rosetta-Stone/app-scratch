@@ -77,17 +77,37 @@ jobs:
                 alreadyTried.push({ num, headSha });
                 continue;
               }
-              try {
-                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
-                await github.graphql(
-                  `mutation($prId: ID!, $headSha: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $prId, expectedHeadOid: $headSha }) { mergeQueueEntry { position } } }`,
-                  { prId: pr.node_id, headSha }
-                );
+              // t/4567 live-fire finding: GitHub can still be processing the dequeue of
+              // this exact PR from the group that just failed, briefly rejecting a
+              // re-enqueue with "Pull request is already in the queue" even though the
+              // mergeQueue.entries query (moments earlier) already showed it empty. One
+              // short bounded retry absorbs that race; a real double-infra-failure (the
+              // F2 case this arm tests) is NOT affected, since that marker check above
+              // already short-circuited before reaching here.
+              let lastErr;
+              let ok = false;
+              for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
+                try {
+                  const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
+                  await github.graphql(
+                    `mutation($prId: ID!, $headSha: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $prId, expectedHeadOid: $headSha }) { mergeQueueEntry { position } } }`,
+                    { prId: pr.node_id, headSha }
+                  );
+                  ok = true;
+                } catch (e) {
+                  lastErr = e;
+                  if (attempt < 2 && /already in the queue/i.test(e.message)) {
+                    console.log(`re-enqueue of PR #${num} hit the dequeue race, retrying once after 5s...`);
+                    await new Promise(r => setTimeout(r, 5000));
+                  }
+                }
+              }
+              if (ok) {
                 await github.rest.issues.createComment({ owner, repo, issue_number: num, body: `${MARKER(headSha)}\nAuto re-enqueued once (t/4567 FM3 scaffold).` });
                 reenqueued.push({ num, headSha });
                 console.log(`Re-enqueued PR #${num} pinned to ${headSha}`);
-              } catch (e) {
-                console.log(`::warning::re-enqueue of PR #${num} @ ${headSha} failed: ${e.message}`);
+              } else {
+                console.log(`::warning::re-enqueue of PR #${num} @ ${headSha} failed: ${lastErr.message}`);
               }
             }
 
