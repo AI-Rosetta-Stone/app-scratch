@@ -1,0 +1,109 @@
+name: scratch-ci
+# t/4567 live-fire scaffold: stands in for the real repo's ci.yml ci-gate job plus the
+# merge_group-scoped consult-hold-guard/joint-gv-guard jobs (C1/C2). ci-gate's sleep
+# stands in for the real ~25min suite -- long enough to meaningfully test the "hold
+# applied while ci-gate is running" window (arm 7), short enough to iterate quickly.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  ci-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Simulate the full suite, honoring the force-failure marker
+        id: suite
+        run: |
+          echo "ci-gate: simulating the full suite..."
+          sleep 45
+          mkdir -p classify
+          if [ -f .scratch-force-failure ]; then
+            MODE=$(cat .scratch-force-failure)
+            echo "ci-gate: forced failure mode = $MODE"
+            if [ "$MODE" = "infra" ]; then
+              echo '{"abnormalEnd": true, "reason": "forced-infra-arm"}' > classify/verdict.json
+              echo "ci-gate: FAILING (infra-classified)."
+              echo "fail_mode=infra" >> "$GITHUB_OUTPUT"
+              exit 1
+            elif [ "$MODE" = "real" ]; then
+              echo '{"abnormalEnd": false, "reason": "forced-real-arm"}' > classify/verdict.json
+              echo "ci-gate: FAILING (real test failure)."
+              echo "fail_mode=real" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
+          echo "ci-gate: done, no forced failure."
+      - name: Upload classification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: infra-classify
+          path: classify/verdict.json
+          if-no-files-found: ignore
+
+  consult-hold-guard:
+    if: github.event_name == 'merge_group'
+    needs: [ci-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enumerate the group and refuse if any PR carries consult-hold
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          chmod +x get-merge-group-prs.sh
+          PRS_JSON=$(./get-merge-group-prs.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.merge_group.base_sha }}" \
+            "${{ github.event.merge_group.head_sha }}" \
+            "${{ github.event.merge_group.head_ref }}")
+          echo "group PRs and labels: $PRS_JSON"
+          HELD=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("consult-hold"))] | map(.number) | join(",")')
+          if [ -n "$HELD" ]; then
+            echo "::error::consult-hold-guard (merge_group): PR(s) #${HELD} carry consult-hold. FAILING CLOSED."
+            exit 1
+          fi
+          echo "guard OK."
+
+  joint-gv-guard:
+    if: github.event_name == 'merge_group'
+    needs: [ci-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enumerate the group and refuse if any PR carries joint-gv
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          chmod +x get-merge-group-prs.sh
+          PRS_JSON=$(./get-merge-group-prs.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.merge_group.base_sha }}" \
+            "${{ github.event.merge_group.head_sha }}" \
+            "${{ github.event.merge_group.head_ref }}")
+          echo "group PRs and labels: $PRS_JSON"
+          JOINT=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("joint-gv"))] | map(.number) | join(",")')
+          if [ -n "$JOINT" ]; then
+            echo "::error::joint-gv-guard (merge_group): PR(s) #${JOINT} carry joint-gv. FAILING CLOSED."
+            exit 1
+          fi
+          echo "guard OK."

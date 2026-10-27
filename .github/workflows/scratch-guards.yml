@@ -1,0 +1,41 @@
+name: scratch-guards
+# t/4567 live-fire scaffold: PR-tier fast guards, mirroring the real repo's
+# consult-hold-guard.yml / joint-gv-guard.yml (pull_request-only, enqueue-time check).
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  consult-hold-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse while consult-hold is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          HAS_HOLD=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json labels --jq '[.labels[].name] | contains(["consult-hold"])')
+          echo "consult-hold present: $HAS_HOLD"
+          if [ "$HAS_HOLD" = "true" ]; then
+            echo "::error::consult-hold present — blocked."
+            exit 1
+          fi
+
+  joint-gv-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse while joint-gv is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          HAS_GV=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json labels --jq '[.labels[].name] | contains(["joint-gv"])')
+          echo "joint-gv present: $HAS_GV"
+          if [ "$HAS_GV" = "true" ]; then
+            echo "::error::joint-gv present — blocked."
+            exit 1
+          fi
