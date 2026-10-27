@@ -1,0 +1,15 @@
+name: scratch-f4-shim-test
+# t/4567 SO F4 shim test -- runs test-get-merge-group-prs-f4.sh on ubuntu-latest, which
+# has jq preinstalled (unlike the local Windows dev environment this was authored on).
+on:
+  workflow_dispatch:
+
+jobs:
+  run-shim-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run F4 shim test
+        run: |
+          chmod +x get-merge-group-prs.sh test-get-merge-group-prs-f4.sh
+          ./test-get-merge-group-prs-f4.sh
