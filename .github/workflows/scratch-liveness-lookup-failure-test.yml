@@ -1,0 +1,14 @@
+name: scratch-liveness-lookup-failure-test
+# t/4567 SO arm 3 (e/380#3) -- runs on ubuntu-latest, which has jq preinstalled.
+on:
+  workflow_dispatch:
+
+jobs:
+  run-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lookup-failure test
+        run: |
+          chmod +x operations/devops/check-merge-queue-liveness.sh operations/devops/test-check-merge-queue-liveness-lookup-failure.sh
+          operations/devops/test-check-merge-queue-liveness-lookup-failure.sh
