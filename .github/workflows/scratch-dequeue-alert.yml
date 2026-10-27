@@ -8,16 +8,11 @@ permissions:
   issues: write
 
 jobs:
-  dump-payload:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dump the dequeued event payload (diagnostic)
-        run: echo '${{ toJSON(github.event) }}'
-
   alert-on-unexpected-dequeue:
-    if: >-
-      github.event.pull_request.merge_queue_dequeue_reason != 'MERGE' &&
-      github.event.pull_request.merge_queue_dequeue_reason != null
+    # t/4567 D1 live-fire finding: the reason lives at github.event.reason (top level of
+    # the dequeued payload), NOT github.event.pull_request.merge_queue_dequeue_reason --
+    # confirmed via a payload dump (reason: "MERGE" on a clean merge).
+    if: github.event.reason != 'MERGE'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
@@ -25,7 +20,7 @@ jobs:
           script: |
             const owner = context.repo.owner, repo = context.repo.repo;
             const pr = context.payload.pull_request;
-            const reason = pr.merge_queue_dequeue_reason;
+            const reason = context.payload.reason;
             const created = await github.rest.issues.create({
               owner, repo,
               title: `Merge-queue dequeue, not a merge: PR #${pr.number} (${reason})`,
