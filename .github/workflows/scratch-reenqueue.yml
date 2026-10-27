@@ -3,6 +3,10 @@ name: scratch-reenqueue
 # file in the PR's diff simulates an infra-classified failure (abnormalEnd=true) vs a real
 # one; ci-gate's own exit code stays green either way so merge_group completion always fires,
 # then this step decides whether the FAILURE was infra or real from that marker file.
+#
+# SO F1/F2 fixes (e/375#2, t/4567#33): pin to the entry's tested headSha (not the PR's
+# current head), and persist a per-PR/per-head marker comment so a repeat infra failure on
+# the SAME head does not re-enqueue again -- it escalates instead.
 on:
   workflow_run:
     workflows: [scratch-ci]
@@ -12,11 +16,10 @@ jobs:
   re-enqueue-infra-failures:
     if: github.event.workflow_run.event == 'merge_group' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
-    # Live-fire finding: enqueuePullRequest returned "Resource not accessible by
-    # integration" with contents:read/pull-requests:read -- trying pull-requests:write.
     permissions:
       contents: read
       pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +40,7 @@ jobs:
           set -euo pipefail
           if [ ! -f classify/verdict.json ] || [ "$(jq -r .abnormalEnd classify/verdict.json)" != "true" ]; then
             echo "not infra-classified -- nothing to do."
-            echo "numbers=" >> "$GITHUB_OUTPUT"
+            echo "prs_json=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           chmod +x get-merge-group-prs.sh
@@ -45,28 +48,58 @@ jobs:
             "${{ github.repository }}" \
             "${{ github.event.workflow_run.head_branch }}")
           echo "group PRs: $PRS_JSON"
-          NUMBERS=$(echo "$PRS_JSON" | jq -r '[.[].number] | join(",")')
-          echo "numbers=$NUMBERS" >> "$GITHUB_OUTPUT"
+          echo "prs_json=$(echo "$PRS_JSON" | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      - name: Re-enqueue each PR once, pinned
-        if: steps.enumerate.outputs.numbers != ''
+      - name: Re-enqueue each PR once per head, and log it
+        if: steps.enumerate.outputs.prs_json != ''
         continue-on-error: true
         uses: actions/github-script@v7
         env:
-          PR_NUMBERS: ${{ steps.enumerate.outputs.numbers }}
+          PRS_JSON_B64: ${{ steps.enumerate.outputs.prs_json }}
         with:
           script: |
             const owner = context.repo.owner, repo = context.repo.repo;
-            const numbers = process.env.PR_NUMBERS.split(',').map(Number).filter(Boolean);
-            for (const num of numbers) {
-              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
+            const entries = JSON.parse(Buffer.from(process.env.PRS_JSON_B64, 'base64').toString('utf8'));
+            const MARKER = (sha) => `<!-- t4567-fm3-reenqueue:${sha} -->`;
+
+            const reenqueued = [];
+            const alreadyTried = [];
+            for (const entry of entries) {
+              const num = entry.number;
+              const headSha = entry.headSha;
+              if (!headSha) {
+                console.log(`::warning::PR #${num}: no headSha -- skipping.`);
+                continue;
+              }
+              const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: num, per_page: 100 });
+              if (comments.some(c => c.body && c.body.includes(MARKER(headSha)))) {
+                console.log(`PR #${num} @ ${headSha}: already attempted once for this exact head -- NOT re-enqueuing again (F2).`);
+                alreadyTried.push({ num, headSha });
+                continue;
+              }
               try {
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
                 await github.graphql(
                   `mutation($prId: ID!, $headSha: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $prId, expectedHeadOid: $headSha }) { mergeQueueEntry { position } } }`,
-                  { prId: pr.node_id, headSha: pr.head.sha }
+                  { prId: pr.node_id, headSha }
                 );
-                console.log(`Re-enqueued PR #${num} pinned to ${pr.head.sha}`);
+                await github.rest.issues.createComment({ owner, repo, issue_number: num, body: `${MARKER(headSha)}\nAuto re-enqueued once (t/4567 FM3 scaffold).` });
+                reenqueued.push({ num, headSha });
+                console.log(`Re-enqueued PR #${num} pinned to ${headSha}`);
               } catch (e) {
-                console.log(`::warning::re-enqueue of PR #${num} failed: ${e.message}`);
+                console.log(`::warning::re-enqueue of PR #${num} @ ${headSha} failed: ${e.message}`);
               }
+            }
+
+            if (alreadyTried.length) {
+              const created = await github.rest.issues.create({
+                owner, repo,
+                title: `CI infra re-enqueue exhausted: ${alreadyTried.map(r => `#${r.num}`).join(', ')}`,
+                body: `Repeat infra-classified failure on an already-retried head. NOT re-enqueuing again. PR(s): ${alreadyTried.map(r => `#${r.num}@${r.headSha.slice(0, 7)}`).join(', ')}`,
+                labels: [],
+              });
+              console.log(`::warning::Created escalation issue #${created.data.number}`);
+            }
+            if (reenqueued.length) {
+              console.log(`Re-enqueued: ${reenqueued.map(r => `#${r.num}`).join(', ')}`);
             }
