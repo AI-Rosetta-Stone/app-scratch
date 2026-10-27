@@ -70,9 +70,17 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x get-merge-group-prs.sh
+          # t/4567 arm 3: a scaffold-only marker, active ONLY on merge_group, that forces
+          # the enumeration step to target a nonexistent queue branch -- simulating an
+          # enumeration failure (API error / zero entries) without touching the real script.
+          REF="${{ github.ref }}"
+          if [ "${{ github.event_name }}" = "merge_group" ] && [ -f .scratch-force-enum-failure ]; then
+            echo "consult-hold-guard: forcing enumeration failure (arm 3 scaffold marker)."
+            REF="refs/heads/gh-readonly-queue/nonexistent-branch/pr-999-deadbeef"
+          fi
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "${{ github.ref }}")
+            "$REF")
           echo "group PRs and labels: $PRS_JSON"
           HELD=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("consult-hold"))] | map(.number) | join(",")')
           if [ -n "$HELD" ]; then
