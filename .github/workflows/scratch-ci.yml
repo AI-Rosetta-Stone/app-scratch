@@ -67,12 +67,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x get-merge-group-prs.sh
-          BRANCH="${{ github.event.merge_group.base_ref }}"
-          BRANCH="${BRANCH#refs/heads/}"
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "$BRANCH" \
-            "${{ github.event.merge_group.head_ref }}")
+            "${{ github.ref }}")
           echo "group PRs and labels: $PRS_JSON"
           HELD=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("consult-hold"))] | map(.number) | join(",")')
           if [ -n "$HELD" ]; then
@@ -96,12 +93,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x get-merge-group-prs.sh
-          BRANCH="${{ github.event.merge_group.base_ref }}"
-          BRANCH="${BRANCH#refs/heads/}"
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "$BRANCH" \
-            "${{ github.event.merge_group.head_ref }}")
+            "${{ github.ref }}")
           echo "group PRs and labels: $PRS_JSON"
           JOINT=$(echo "$PRS_JSON" | jq -r '[.[] | select(.labels | index("joint-gv"))] | map(.number) | join(",")')
           if [ -n "$JOINT" ]; then
