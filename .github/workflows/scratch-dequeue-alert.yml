@@ -20,7 +20,7 @@ jobs:
           script: |
             const owner = context.repo.owner, repo = context.repo.repo;
             const pr = context.payload.pull_request;
-            const reason = context.payload.reason;
+            const reason = context.payload.reason || 'unknown';
             const created = await github.rest.issues.create({
               owner, repo,
               title: `Merge-queue dequeue, not a merge: PR #${pr.number} (${reason})`,
