@@ -39,12 +39,12 @@ jobs:
             exit 0
           fi
           chmod +x get-merge-group-prs.sh
-          BASE_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/${{ github.event.workflow_run.head_branch }} --jq '.object.sha' 2>/dev/null || echo "")
+          HEAD_REF="${{ github.event.workflow_run.head_branch }}"
+          BRANCH=$(echo "$HEAD_REF" | grep -oP 'gh-readonly-queue/\K[^/]+')
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "${BASE_SHA}" \
-            "${{ github.event.workflow_run.head_sha }}" \
-            "${{ github.event.workflow_run.head_branch }}")
+            "$BRANCH" \
+            "$HEAD_REF")
           echo "group PRs: $PRS_JSON"
           NUMBERS=$(echo "$PRS_JSON" | jq -r '[.[].number] | join(",")')
           echo "numbers=$NUMBERS" >> "$GITHUB_OUTPUT"
