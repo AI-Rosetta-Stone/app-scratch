@@ -12,9 +12,11 @@ jobs:
   re-enqueue-infra-failures:
     if: github.event.workflow_run.event == 'merge_group' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
+    # Live-fire finding: enqueuePullRequest needs write access -- read-only was refused
+    # with "Resource not accessible by integration".
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -39,11 +41,8 @@ jobs:
             exit 0
           fi
           chmod +x get-merge-group-prs.sh
-          BASE_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/${{ github.event.workflow_run.head_branch }} --jq '.object.sha' 2>/dev/null || echo "")
           PRS_JSON=$(./get-merge-group-prs.sh \
             "${{ github.repository }}" \
-            "${BASE_SHA}" \
-            "${{ github.event.workflow_run.head_sha }}" \
             "${{ github.event.workflow_run.head_branch }}")
           echo "group PRs: $PRS_JSON"
           NUMBERS=$(echo "$PRS_JSON" | jq -r '[.[].number] | join(",")')
