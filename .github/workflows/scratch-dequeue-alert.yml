@@ -8,6 +8,12 @@ permissions:
   issues: write
 
 jobs:
+  dump-payload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump the dequeued event payload (diagnostic)
+        run: echo '${{ toJSON(github.event) }}'
+
   alert-on-unexpected-dequeue:
     if: >-
       github.event.pull_request.merge_queue_dequeue_reason != 'MERGE' &&
