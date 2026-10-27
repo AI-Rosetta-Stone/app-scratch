@@ -1,0 +1,29 @@
+name: scratch-dequeue-alert
+# t/4567 D1 live-fire scaffold -- mirrors merge-queue-dequeue-alert.yml.
+on:
+  pull_request:
+    types: [dequeued]
+
+permissions:
+  issues: write
+
+jobs:
+  alert-on-unexpected-dequeue:
+    if: >-
+      github.event.pull_request.merge_queue_dequeue_reason != 'MERGE' &&
+      github.event.pull_request.merge_queue_dequeue_reason != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner, repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+            const reason = pr.merge_queue_dequeue_reason;
+            const created = await github.rest.issues.create({
+              owner, repo,
+              title: `Merge-queue dequeue, not a merge: PR #${pr.number} (${reason})`,
+              body: `PR #${pr.number} @ ${pr.head.sha.slice(0, 7)} left the merge queue with reason ${reason} (t/4567 D1 scaffold, arm 5b).`,
+              labels: [],
+            });
+            console.log(`Created alert issue #${created.data.number} (reason: ${reason})`);

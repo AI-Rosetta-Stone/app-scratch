@@ -1,24 +1,21 @@
 name: scratch-reenqueue
-# t/4567 live-fire scaffold: FM3's re-enqueue-on-infra-failure, simplified. A "failure.marker"
-# file in the PR's diff simulates an infra-classified failure (abnormalEnd=true) vs a real
-# one; ci-gate's own exit code stays green either way so merge_group completion always fires,
-# then this step decides whether the FAILURE was infra or real from that marker file.
-#
-# SO F1/F2 fixes (e/375#2, t/4567#33): pin to the entry's tested headSha (not the PR's
-# current head), and persist a per-PR/per-head marker comment so a repeat infra failure on
-# the SAME head does not re-enqueue again -- it escalates instead.
+# t/4567 live-fire scaffold: FM3's infra-failure handler, REVISED (TL ruling t/4567#37-39).
+# Automatic re-enqueue is REMOVED entirely -- enqueuePullRequest called with github.token
+# never triggers a new merge_group check run (GitHub doesn't start workflows for
+# GITHUB_TOKEN-caused events), so a re-enqueued entry silently never gets checked and
+# times out. This job now only ALERTS on an infra-classified failure, naming the dequeued
+# PR(s) and the head(s) that were in the failed group -- arm 5a.
 on:
   workflow_run:
     workflows: [scratch-ci]
     types: [completed]
 
 jobs:
-  re-enqueue-infra-failures:
+  alert-infra-failures:
     if: github.event.workflow_run.event == 'merge_group' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       issues: write
     steps:
       - uses: actions/checkout@v4
@@ -50,9 +47,8 @@ jobs:
           echo "group PRs: $PRS_JSON"
           echo "prs_json=$(echo "$PRS_JSON" | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      - name: Re-enqueue each PR once per head, and log it
+      - name: File the alert-escalated issue
         if: steps.enumerate.outputs.prs_json != ''
-        continue-on-error: true
         uses: actions/github-script@v7
         env:
           PRS_JSON_B64: ${{ steps.enumerate.outputs.prs_json }}
@@ -60,70 +56,11 @@ jobs:
           script: |
             const owner = context.repo.owner, repo = context.repo.repo;
             const entries = JSON.parse(Buffer.from(process.env.PRS_JSON_B64, 'base64').toString('utf8'));
-            const MARKER = (sha) => `<!-- t4567-fm3-reenqueue:${sha} -->`;
-
-            const reenqueued = [];
-            const alreadyTried = [];
-            for (const entry of entries) {
-              const num = entry.number;
-              const headSha = entry.headSha;
-              if (!headSha) {
-                console.log(`::warning::PR #${num}: no headSha -- skipping.`);
-                continue;
-              }
-              const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: num, per_page: 100 });
-              if (comments.some(c => c.body && c.body.includes(MARKER(headSha)))) {
-                console.log(`PR #${num} @ ${headSha}: already attempted once for this exact head -- NOT re-enqueuing again (F2).`);
-                alreadyTried.push({ num, headSha });
-                continue;
-              }
-              // t/4567 live-fire finding: GitHub can still be processing the dequeue of
-              // this exact PR from the group that just failed, briefly rejecting a
-              // re-enqueue with "Pull request is already in the queue" even though the
-              // mergeQueue.entries query (moments earlier) already showed it empty. One
-              // short bounded retry absorbs that race; a real double-infra-failure (the
-              // F2 case this arm tests) is NOT affected, since that marker check above
-              // already short-circuited before reaching here.
-              let lastErr;
-              let ok = false;
-              const DELAYS_MS = [5000, 10000, 20000];
-              for (let attempt = 1; attempt <= DELAYS_MS.length + 1 && !ok; attempt++) {
-                try {
-                  const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
-                  await github.graphql(
-                    `mutation($prId: ID!, $headSha: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $prId, expectedHeadOid: $headSha }) { mergeQueueEntry { position } } }`,
-                    { prId: pr.node_id, headSha }
-                  );
-                  ok = true;
-                } catch (e) {
-                  lastErr = e;
-                  const delay = DELAYS_MS[attempt - 1];
-                  if (delay && /already in the queue/i.test(e.message)) {
-                    console.log(`re-enqueue of PR #${num} hit the dequeue race (attempt ${attempt}), retrying after ${delay / 1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                  } else {
-                    break;
-                  }
-                }
-              }
-              if (ok) {
-                await github.rest.issues.createComment({ owner, repo, issue_number: num, body: `${MARKER(headSha)}\nAuto re-enqueued once (t/4567 FM3 scaffold).` });
-                reenqueued.push({ num, headSha });
-                console.log(`Re-enqueued PR #${num} pinned to ${headSha}`);
-              } else {
-                console.log(`::warning::re-enqueue of PR #${num} @ ${headSha} failed: ${lastErr.message}`);
-              }
-            }
-
-            if (alreadyTried.length) {
-              const created = await github.rest.issues.create({
-                owner, repo,
-                title: `CI infra re-enqueue exhausted: ${alreadyTried.map(r => `#${r.num}`).join(', ')}`,
-                body: `Repeat infra-classified failure on an already-retried head. NOT re-enqueuing again. PR(s): ${alreadyTried.map(r => `#${r.num}@${r.headSha.slice(0, 7)}`).join(', ')}`,
-                labels: [],
-              });
-              console.log(`::warning::Created escalation issue #${created.data.number}`);
-            }
-            if (reenqueued.length) {
-              console.log(`Re-enqueued: ${reenqueued.map(r => `#${r.num}`).join(', ')}`);
-            }
+            const list = entries.map(e => `#${e.number}@${(e.headSha || 'unknown').slice(0, 7)}`).join(', ');
+            const created = await github.rest.issues.create({
+              owner, repo,
+              title: `Infra-classified merge_group failure: ${entries.map(e => `#${e.number}`).join(', ')}`,
+              body: `**Infra-classified merge_group failure (t/4567 FM3, alert-only, arm 5a).** PR(s) dequeued: ${list}. No automatic re-enqueue (GITHUB_TOKEN enqueues never trigger a merge_group check).`,
+              labels: [],
+            });
+            console.log(`Created alert issue #${created.data.number} for: ${list}`);
