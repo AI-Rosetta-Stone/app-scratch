@@ -1,0 +1,33 @@
+name: scratch-github-token-reproducer
+# t/4567 M2 (SO e/378#2): a real reproducer of the root cause (t/4567#37) -- enqueue a PR
+# using github.token (the job's own built-in token), exactly as the removed F1/F2 code
+# did, to show the merge_group check genuinely never gets requested.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to enqueue with GITHUB_TOKEN'
+        required: true
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  enqueue-with-github-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enqueue the PR using github.token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.inputs.pr_number }}"
+          OWNER_REPO="${{ github.repository }}"
+          OWNER="${OWNER_REPO%/*}"
+          NAME="${OWNER_REPO#*/}"
+          PR_ID=$(gh api graphql -f query='query($owner:String!,$repo:String!,$num:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$num){id headRefOid}}}' -f owner="$OWNER" -f repo="$NAME" -F num="$PR_NUM" --jq '.data.repository.pullRequest.id')
+          HEAD_SHA=$(gh api graphql -f query='query($owner:String!,$repo:String!,$num:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$num){headRefOid}}}' -f owner="$OWNER" -f repo="$NAME" -F num="$PR_NUM" --jq '.data.repository.pullRequest.headRefOid')
+          echo "Enqueuing PR #$PR_NUM (id=$PR_ID) pinned to $HEAD_SHA, using github.token..."
+          gh api graphql -f query='mutation($prId:ID!,$sha:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$prId,expectedHeadOid:$sha}){mergeQueueEntry{position}}}' -f prId="$PR_ID" -f sha="$HEAD_SHA"
+          echo "Enqueued. This should NOT produce a working merge_group check (t/4567#37)."
