@@ -23,7 +23,9 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
-          config-file: ./.github/codeql/codeql-config.yml
+          # t/4567 C3 arm (b): deliberately bad path to force a genuine CodeQL
+          # analysis FAILURE (not an alert) -- never merge, must be refused/held.
+          config-file: ./.github/codeql/does-not-exist.yml
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4
