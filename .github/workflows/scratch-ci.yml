@@ -14,13 +14,14 @@ on:
 permissions:
   contents: read
 
-# t/4567 TL design (t/4567#71): on merge_group, every run shares ONE group key so a
-# newer, larger batch's run cancels the older, smaller batch's run -- "test each batch
-# once." PR-tier and push runs keep their own per-ref group (standard, non-disruptive
-# behavior), confirming the PR tier is unaffected.
+# t/4567 K1 (SO/TL e/392#5, PR #4055's exact head block -- re-arming arms a/d/f with
+# it): merge_group events share one constant group; every other event gets
+# github.run_id, unique per run, so it can never collide with any other run including
+# another PR-tier run on the same ref. cancel-in-progress is ALSO conditioned on
+# merge_group, the second independent guard on top of the group key.
 concurrency:
-  group: ${{ github.event_name == 'merge_group' && format('merge-queue-ci-{0}', github.workflow) || format('pr-ci-{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'merge_group' && 'merge-group-batch' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'merge_group' }}
 
 jobs:
   ci-gate:

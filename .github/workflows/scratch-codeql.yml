@@ -12,11 +12,10 @@ permissions:
   contents: read
   security-events: write
 
-# t/4567 TL design (t/4567#71): same concurrency scoping as scratch-ci.yml -- only the
-# merge_group tier shares a cancellable group key, so CodeQL also runs once per batch.
+# t/4567 K1 (SO/TL e/392#5, PR #4055's exact head block): same shape as scratch-ci.yml.
 concurrency:
-  group: ${{ github.event_name == 'merge_group' && format('merge-queue-ci-{0}', github.workflow) || format('pr-ci-{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: true
+  group: codeql-${{ github.event_name == 'merge_group' && 'merge-group-batch' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'merge_group' }}
 
 jobs:
   analyze:
