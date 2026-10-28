@@ -7,6 +7,10 @@ on:
 permissions:
   issues: write
 
+concurrency:
+  group: merge-queue-dequeue-alert
+  cancel-in-progress: false
+
 jobs:
   alert-on-unexpected-dequeue:
     # t/4567 D1 live-fire finding: the reason lives at github.event.reason (top level of
@@ -20,22 +24,24 @@ jobs:
           script: |
             // t/4567 arm (b)/(c) collateral-dequeue batching (TL p/331#2497 condition 1)
             // -- scratch validation of the real repo's merge-queue-dequeue-alert.yml fix.
+            // SO L1 (e/392#2/#3): no [COLLATERAL] marking -- list plainly, note some may
+            // be collateral. L2: key the window on created_at, not updated_at.
             const owner = context.repo.owner, repo = context.repo.repo;
             const pr = context.payload.pull_request;
             const reason = context.payload.reason || 'unknown';
             const shortSha = pr.head.sha.slice(0, 7);
-            const entryLine = `- [ ] PR #${pr.number} @ \`${shortSha}\` (reason: \`${reason}\`) -- ${pr.html_url}`;
+            const entryLine = `- PR #${pr.number} @ \`${shortSha}\` (reason: \`${reason}\`) -- ${pr.html_url}`;
             const BATCH_LABEL = 'merge-queue-dequeue-batch';
             const WINDOW_MS = 15 * 60 * 1000;
             const now = Date.now();
 
             const { data: candidates } = await github.rest.issues.listForRepo({
-              owner, repo, state: 'open', labels: BATCH_LABEL, sort: 'updated', direction: 'desc', per_page: 5,
+              owner, repo, state: 'open', labels: BATCH_LABEL, sort: 'created', direction: 'desc', per_page: 5,
             });
-            const batchIssue = candidates.find(i => (now - new Date(i.updated_at).getTime()) < WINDOW_MS);
+            const batchIssue = candidates.find(i => (now - new Date(i.created_at).getTime()) < WINDOW_MS);
 
             if (!batchIssue) {
-              const body = `**Merge-queue dequeue batch (t/4567 D1 scaffold).** Any entry marked \`[ ]\` is unresolved; a later entry added to this issue retroactively marks every earlier one \`[COLLATERAL]\`.\n\n${entryLine}`;
+              const body = `**Merge-queue dequeue batch (t/4567 D1 scaffold).** Some of these may be collateral; re-arm each one pinned to its own head.\n\n${entryLine}`;
               const created = await github.rest.issues.create({
                 owner, repo,
                 title: `Merge-queue dequeue batch (t/4567 D1), starting PR #${pr.number}`,
@@ -45,11 +51,7 @@ jobs:
               console.log(`Created batch dequeue issue #${created.data.number} for PR #${pr.number} (reason: ${reason})`);
             } else {
               const { data: full } = await github.rest.issues.get({ owner, repo, issue_number: batchIssue.number });
-              const updatedBody = full.body
-                .split('\n')
-                .map(line => line.startsWith('- [ ] ') ? line.replace('- [ ] ', '- [x] [COLLATERAL] ') : line)
-                .concat([entryLine])
-                .join('\n');
+              const updatedBody = `${full.body}\n${entryLine}`;
               await github.rest.issues.update({ owner, repo, issue_number: batchIssue.number, body: updatedBody });
               console.log(`Appended PR #${pr.number} to existing batch dequeue issue #${batchIssue.number} (reason: ${reason})`);
             }
