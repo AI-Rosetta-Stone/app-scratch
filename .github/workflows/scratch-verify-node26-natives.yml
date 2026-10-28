@@ -1,0 +1,24 @@
+name: scratch-verify-node26-natives
+on:
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build verification image (mirrors taxonomy-editor/Dockerfile's prod-deps stage)
+        run: |
+          cat > /tmp/Dockerfile.verify <<'EOF'
+          FROM ghcr.io/ai-rosetta-stone/ai-triad-base:2026-10-28@sha256:aea2c6351135e37af25f98d96ba4ed7caf4646339b850979eac919fe63bbadc9 AS prod-deps
+          RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++
+          RUN npm install -g pnpm@11.20.0
+          WORKDIR /deps
+          COPY taxonomy-editor-package.json ./package.json
+          COPY taxonomy-editor-pnpm-lock.yaml ./pnpm-lock.yaml
+          COPY pnpm-workspace.yaml ./
+          RUN pnpm install --prod --frozen-lockfile
+          RUN node --version
+          RUN node -e "const ort = require('onnxruntime-node'); console.log('onnxruntime-node loaded OK, binding:', typeof ort.InferenceSession);"
+          RUN node -e "const pty = require('node-pty'); const p = pty.spawn('node', ['--version'], {name:'xterm-color', cols:80, rows:30}); p.onData(d => process.stdout.write(d)); p.onExit(() => process.exit(0));"
+          EOF
+          docker build -f /tmp/Dockerfile.verify -t node26-verify:latest .
